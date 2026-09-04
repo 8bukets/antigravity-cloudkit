@@ -1,12 +1,14 @@
 import Foundation
 import CoreData
 
-/// PersistentHistoryProcessor: improved batching and retry logic for processing history transactions.
-/// Call `processHistoryIfNeeded()` from your remote-change handler or after receiving a CloudKit push.
+/// PersistentHistoryProcessor: improved with pruning and simple exponential backoff for retries.
+/// This extends the previous implementation with resumable batches, basic pruning hooks, and
+/// retry/backoff for transient failures. Still placeholder-first; tune thresholds for your app.
 final class PersistentHistoryProcessor {
     private let container: NSPersistentCloudKitContainer
     private let batchSize: Int
-    private let tokenKey = "com.8bukets.antigravity.historyToken.v2"
+    private let tokenKey = "com.8bukets.antigravity.historyToken.v3"
+    private let maxRetries = 5
 
     init(container: NSPersistentCloudKitContainer, batchSize: Int = 50) {
         self.container = container
@@ -27,10 +29,51 @@ final class PersistentHistoryProcessor {
     }
 
     func processHistoryIfNeeded(completion: ((Error?) -> Void)? = nil) {
+        processWithRetry(retriesLeft: maxRetries, delay: 1.0, completion: completion)
+    }
+
+    private func processWithRetry(retriesLeft: Int, delay: TimeInterval, completion: ((Error?) -> Void)?) {
         fetchAndApplyHistory(after: lastToken) { [weak self] newToken, error in
-            if let t = newToken { self?.lastToken = t }
-            completion?(error)
+            if let error = error {
+                guard retriesLeft > 0 else { completion?(error); return }
+                // Exponential backoff
+                let nextDelay = delay * 2
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    self?.processWithRetry(retriesLeft: retriesLeft - 1, delay: nextDelay, completion: completion)
+                }
+                return
+            }
+
+            // Successfully processed at least one batch — persist token and attempt to continue if more pending
+            if let t = newToken {
+                self?.lastToken = t
+                // Try to fetch additional batches immediately (resumable)
+                self?.fetchAndApplyRemainingBatches(completion: completion)
+            } else {
+                completion?(nil)
+            }
         }
+    }
+
+    private func fetchAndApplyRemainingBatches(completion: ((Error?) -> Void)?) {
+        // Loop until no more transactions or we hit a sensible limit to avoid CPU starvation
+        var iteration = 0
+        let maxIterations = 20
+        func loop() {
+            guard iteration < maxIterations else { completion?(nil); return }
+            iteration += 1
+            fetchAndApplyHistory(after: lastToken) { [weak self] newToken, error in
+                if let error = error { completion?(error); return }
+                if let t = newToken {
+                    self?.lastToken = t
+                    // Continue loop to catch more
+                    loop()
+                } else {
+                    completion?(nil)
+                }
+            }
+        }
+        loop()
     }
 
     private func fetchAndApplyHistory(after token: NSPersistentHistoryToken?, completion: @escaping (NSPersistentHistoryToken?, Error?) -> Void) {
@@ -41,11 +84,11 @@ final class PersistentHistoryProcessor {
             do {
                 guard let result = try bgContext.execute(request) as? NSPersistentHistoryResult,
                       let transactions = result.result as? [NSPersistentHistoryTransaction], !transactions.isEmpty else {
-                    completion(token, nil)
+                    completion(nil, nil)
                     return
                 }
 
-                // Merge changes into viewContext
+                // Apply transactions to viewContext
                 let viewContext = self.container.viewContext
                 viewContext.performAndWait {
                     for transaction in transactions {
@@ -60,12 +103,20 @@ final class PersistentHistoryProcessor {
                     }
                 }
 
-                // Persist last token from this batch
+                // Optionally prune history here (placeholder hook)
+                self.pruneHistoryIfNeeded(transactions: transactions, context: bgContext)
+
+                // Return last token
                 let last = transactions.last?.token
                 completion(last, nil)
             } catch {
-                completion(token, error)
+                completion(nil, error)
             }
         }
+    }
+
+    private func pruneHistoryIfNeeded(transactions: [NSPersistentHistoryTransaction], context: NSManagedObjectContext) {
+        // Placeholder: in production you might delete old history entries or notify the server
+        // For example, trim history older than X days. Use NSPersistentHistoryChangeRequest to delete: not shown here.
     }
 }
