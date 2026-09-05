@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Placeholder entitlements file. DO NOT COMMIT real bundle IDs, provisioning profiles, or private keys.
+      Replace the placeholder values locally on your machine before creating the wire-ids PR.
+
+      How to use:
+      - Copy this file locally to AntigravityCloudKit/AntigravityCloudKit.entitlements (overwrite) and
+        replace the placeholder container and team identifiers with your real values.
+      - Commit the changes on a local branch and open PR feature/icloud-wire-ids -> feature/icloud-setup.
+    -->
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <!-- Replace with your CloudKit container(s), e.g. iCloud.com.yourcompany.antigravity -->
+        <string>iCloud.com.example.antigravity.placeholder</string>
+    </array>
+    <key>com.apple.developer.ubiquity-container-identifiers</key>
+    <array>
+        <string>iCloud.com.example.antigravity.placeholder</string>
+    </array>
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudKit</string>
+    </array>
+</dict>
+</plist>
