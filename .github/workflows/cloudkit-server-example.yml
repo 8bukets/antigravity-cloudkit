@@ -1,0 +1,43 @@
+name: CloudKit Server Example - call REST
+on:
+  workflow_dispatch:
+jobs:
+  call-cloudkit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node & Python
+        uses: actions/setup-node@v4
+        with: node-version: '18'
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          npm install jose
+          python -m pip install --upgrade pip pyjwt[crypto]
+
+      - name: Generate JWT (Node)
+        env:
+          NODE_P8_PATH: ${{ secrets.APPLE_P8_PATH }} # store .p8 content in secret or use file from repo secret store
+          NODE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
+          NODE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NODE_CONTAINER: ${{ secrets.CLOUDKIT_CONTAINER }}
+        run: |
+          echo "${{ secrets.APPLE_P8 }}" > ./authkey.p8
+          NODE_P8_PATH=./authkey.p8 NODE_KEY_ID=${{ secrets.APPLE_KEY_ID }} NODE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }} NODE_CONTAINER=${{ secrets.CLOUDKIT_CONTAINER }} node scripts/generate_jwt_node.js > jwt.txt
+          cat jwt.txt
+
+      - name: Call CloudKit REST (Node)
+        env:
+          CLOUDKIT_JWT: ${{ steps.generate_jwt_node.outputs.jwt || (cat jwt.txt) }}
+          CLOUDKIT_CONTAINER: ${{ secrets.CLOUDKIT_CONTAINER }}
+        run: |
+          JWT=$(cat jwt.txt)
+          curl -s -X POST "https://api.apple-cloudkit.com/database/1/${{ secrets.CLOUDKIT_CONTAINER }}/development/public/records/lookup" \
+            -H "Authorization: Bearer $JWT" \
+            -H "Content-Type: application/json" \
+            -d '{"records":[{"recordName":"someRecordID"}]}' | jq .
