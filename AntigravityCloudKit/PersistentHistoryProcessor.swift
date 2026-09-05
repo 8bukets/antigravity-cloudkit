@@ -1,54 +1,46 @@
 import Foundation
 import CoreData
 
-/// PersistentHistoryProcessor: improved with pruning and simple exponential backoff for retries.
-/// This extends the previous implementation with resumable batches, basic pruning hooks, and
-/// retry/backoff for transient failures. Still placeholder-first; tune thresholds for your app.
+/// PersistentHistoryProcessor: improved with jittered exponential backoff and TokenStore-backed tokens.
 final class PersistentHistoryProcessor {
     private let container: NSPersistentCloudKitContainer
     private let batchSize: Int
-    private let tokenKey = "com.8bukets.antigravity.historyToken.v3"
+    private let tokenStore: TokenStore
     private let maxRetries = 5
 
-    init(container: NSPersistentCloudKitContainer, batchSize: Int = 50) {
+    init(container: NSPersistentCloudKitContainer, batchSize: Int = 50, tokenStore: TokenStore = TokenStore()) {
         self.container = container
         self.batchSize = batchSize
+        self.tokenStore = tokenStore
     }
 
     private var lastToken: NSPersistentHistoryToken? {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: tokenKey) else { return nil }
-            return try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSPersistentHistoryToken.self, from: data)
-        }
-        set {
-            guard let t = newValue else { UserDefaults.standard.removeObject(forKey: tokenKey); return }
-            if let d = try? NSKeyedArchiver.archivedData(withRootObject: t, requiringSecureCoding: true) {
-                UserDefaults.standard.set(d, forKey: tokenKey)
-            }
-        }
+        get { tokenStore.loadToken() }
+        set { tokenStore.saveToken(newValue) }
     }
 
     func processHistoryIfNeeded(completion: ((Error?) -> Void)? = nil) {
-        processWithRetry(retriesLeft: maxRetries, delay: 1.0, completion: completion)
+        processWithRetry(retriesLeft: maxRetries, baseDelay: 1.0, completion: completion)
     }
 
-    private func processWithRetry(retriesLeft: Int, delay: TimeInterval, completion: ((Error?) -> Void)?) {
+    private func processWithRetry(retriesLeft: Int, baseDelay: TimeInterval, completion: ((Error?) -> Void)?) {
         fetchAndApplyHistory(after: lastToken) { [weak self] newToken, error in
+            guard let self = self else { return }
             if let error = error {
                 guard retriesLeft > 0 else { completion?(error); return }
-                // Exponential backoff
-                let nextDelay = delay * 2
+                // Exponential backoff with jitter
+                let jitter = Double.random(in: 0...0.5)
+                let delay = baseDelay * pow(2.0, Double(self.maxRetries - retriesLeft)) * (1 + jitter)
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                    self?.processWithRetry(retriesLeft: retriesLeft - 1, delay: nextDelay, completion: completion)
+                    self.processWithRetry(retriesLeft: retriesLeft - 1, baseDelay: baseDelay, completion: completion)
                 }
                 return
             }
 
-            // Successfully processed at least one batch — persist token and attempt to continue if more pending
             if let t = newToken {
-                self?.lastToken = t
-                // Try to fetch additional batches immediately (resumable)
-                self?.fetchAndApplyRemainingBatches(completion: completion)
+                self.lastToken = t
+                // Continue fetching remaining batches, but avoid tight loops
+                self.fetchAndApplyRemainingBatches(completion: completion)
             } else {
                 completion?(nil)
             }
@@ -56,9 +48,8 @@ final class PersistentHistoryProcessor {
     }
 
     private func fetchAndApplyRemainingBatches(completion: ((Error?) -> Void)?) {
-        // Loop until no more transactions or we hit a sensible limit to avoid CPU starvation
         var iteration = 0
-        let maxIterations = 20
+        let maxIterations = 50
         func loop() {
             guard iteration < maxIterations else { completion?(nil); return }
             iteration += 1
@@ -66,8 +57,8 @@ final class PersistentHistoryProcessor {
                 if let error = error { completion?(error); return }
                 if let t = newToken {
                     self?.lastToken = t
-                    // Continue loop to catch more
-                    loop()
+                    // small delay between batches to allow system breathing
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { loop() }
                 } else {
                     completion?(nil)
                 }
@@ -88,7 +79,6 @@ final class PersistentHistoryProcessor {
                     return
                 }
 
-                // Apply transactions to viewContext
                 let viewContext = self.container.viewContext
                 viewContext.performAndWait {
                     for transaction in transactions {
@@ -103,10 +93,9 @@ final class PersistentHistoryProcessor {
                     }
                 }
 
-                // Optionally prune history here (placeholder hook)
-                self.pruneHistoryIfNeeded(transactions: transactions, context: bgContext)
+                // Prune history older than a threshold (placeholder: 30 days)
+                self.pruneHistoryIfNeeded(before: Calendar.current.date(byAdding: .day, value: -30, to: Date()))
 
-                // Return last token
                 let last = transactions.last?.token
                 completion(last, nil)
             } catch {
@@ -115,8 +104,13 @@ final class PersistentHistoryProcessor {
         }
     }
 
-    private func pruneHistoryIfNeeded(transactions: [NSPersistentHistoryTransaction], context: NSManagedObjectContext) {
-        // Placeholder: in production you might delete old history entries or notify the server
-        // For example, trim history older than X days. Use NSPersistentHistoryChangeRequest to delete: not shown here.
+    private func pruneHistoryIfNeeded(before date: Date?) {
+        guard let beforeDate = date else { return }
+        let request = NSPersistentHistoryChangeRequest.deleteHistory(before: beforeDate)
+        do {
+            try container.viewContext.execute(request)
+        } catch {
+            print("Failed pruning history: \(error)")
+        }
     }
 }

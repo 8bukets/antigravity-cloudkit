@@ -1,23 +1,44 @@
 import UIKit
 
-/// SampleDocument: improved UIDocument subclass that registers as an NSFilePresenter
-/// to receive change notifications and provide safer multi-process access.
 class SampleDocument: UIDocument, NSFilePresenter {
     var presentedItemURL: URL?
     var presentedItemOperationQueue: OperationQueue = OperationQueue()
+    private var autosaveTimer: Timer?
 
     override init(fileURL url: URL) {
         super.init(fileURL: url)
         self.presentedItemURL = url
         NSFileCoordinator.addFilePresenter(self)
+        NSFileCoordinator.addFilePresenter(self)
     }
 
     deinit {
         NSFileCoordinator.removeFilePresenter(self)
+        autosaveTimer?.invalidate()
+    }
+
+    override func open(completionHandler: ((Bool) -> Void)? = nil) {
+        super.open { success in
+            if success {
+                // Start autosave timer
+                DispatchQueue.main.async {
+                    self.autosaveTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+                        guard let self = self else { return }
+                        self.updateChangeCount(.done)
+                        self.save(to: self.fileURL, for: .forOverwriting) { _ in }
+                    }
+                }
+            }
+            completionHandler?(success)
+        }
+    }
+
+    override func close(completionHandler: ((Bool) -> Void)? = nil) {
+        autosaveTimer?.invalidate()
+        super.close(completionHandler: completionHandler)
     }
 
     override func contents(forType typeName: String) throws -> Any {
-        // Return Data for the document contents
         if let data = try? Data(contentsOf: fileURL) {
             return data
         }
@@ -25,12 +46,15 @@ class SampleDocument: UIDocument, NSFilePresenter {
     }
 
     override func load(fromContents contents: Any, ofType typeName: String?) throws {
-        // Nothing special here; UIDocument will write/read using contents(forType:)
+        // handle loading if needed
     }
 
-    // NSFilePresenter hooks
     func presentedItemDidChange() {
-        // Called when the file changes on disk. Post notifications or reload UI as needed.
         NotificationCenter.default.post(name: NSNotification.Name("SampleDocumentDidChange"), object: fileURL)
+    }
+
+    func presentedItemDidMove(to newURL: URL) {
+        // update internal URL references
+        self.presentedItemURL = newURL
     }
 }
