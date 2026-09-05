@@ -1,0 +1,26 @@
+wire: entitlements & bundle id (placeholder workflow)
+
+Summary
+- This PR isolates entitlements and bundle-id wiring. It is intentionally config-only and uses placeholders in the repo. Do NOT commit private keys, provisioning profiles, or CI secrets.
+
+What this PR should include (locally)
+- AntigravityCloudKit/AntigravityCloudKit.entitlements with your real iCloud container(s)
+- Xcode Target signing & bundle identifier updates
+
+Workflow (recommended)
+1. Checkout feature/icloud-wire-ids locally:
+   git fetch origin
+   git checkout -b feature/icloud-wire-ids-local origin/feature/icloud-wire-ids
+2. Replace ENTITLEMENTS_PLACEHOLDER.entitlements by copying it → AntigravityCloudKit/AntigravityCloudKit.entitlements and replace placeholder container(s) with your real container(s).
+3. Update bundle identifier + signing in Xcode target (match App ID).
+4. Commit only entitlements/project changes on this branch and push to feature/icloud-wire-ids (remote).
+5. Open PR from feature/icloud-wire-ids → feature/icloud-setup for review.
+
+Checklist for reviewers
+- [ ] Entitlements contain expected iCloud container(s)
+- [ ] Bundle id matches App ID in Developer Portal
+- [ ] No provisioning profiles/private keys committed
+- [ ] CI passes and manual device smoke tests succeed
+
+Why separate PR
+- Keeps config changes auditable and reviews focused on entitlements/signing only.

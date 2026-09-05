@@ -1,0 +1,53 @@
+feature: iCloud placeholder setup — CKShare, history, documents, CI
+
+Summary
+- Add placeholder-first iCloud/CloudKit + Core Data support and tooling:
+  - CKShare placeholder flow (ShareFlow) and CKShareMapping helper to persist stable record names.
+  - Resilient PersistentHistoryProcessor with TokenStore-backed tokens, batch processing, jittered exponential backoff, resumable batches, and pruning.
+  - UIDocument improvements (SampleDocument) implementing NSFilePresenter, autosave, and conflict-change hooks.
+  - TokenStore file-backed token persistence (avoid UserDefaults).
+  - Diagnostics script + lightweight logger.
+  - Unit tests and simulator-based integration tests.
+  - CI workflow updated to run unit + simulator integration tests.
+  - SwiftLint minimal config and docs updates (BEST_PRACTICES, CONTRIBUTING).
+
+Why this is useful
+- Provides a safe template for NSPersistentCloudKitContainer + CloudKit sync patterns, file coordination, and a resilient persistent-history processing flow. Adds CI coverage and baseline tests.
+
+Notable file changes
+- AntigravityCloudKit/PersistentHistoryProcessor.swift — batch processing, jitter/backoff, pruning
+- AntigravityCloudKit/TokenStore.swift — file-backed token storage
+- AntigravityCloudKit/CKShareMapping.swift — stable recordName generator & persistence
+- AntigravityCloudKit/SampleDocument.swift — NSFilePresenter lifecycle, autosave
+- Tests/AntigravityCloudKitTests/* — CKShareMappingTests, TokenStoreTests, IntegrationTests
+- .github/workflows/ci.yml — runs unit + simulator integration tests
+- .swiftlint.yml, scripts/collect_diagnostics.sh, docs updates
+
+Risk assessment & impact
+- No secrets or provisioning profiles are committed.
+- Placeholder container IDs remain; you must wire the real entitlements and bundle ID before device testing and production rollout.
+- CloudKit schema remains in Development until you promote it; sharing behavior and acceptance require real-device testing.
+
+Migration notes (must do locally before merging to main)
+1. Add/confirm ck_recordName attribute for shared entities (or run a lightweight migration).
+2. Replace placeholder entitlement container(s) and set bundle ID in Xcode Target → Signing & Capabilities.
+3. Configure App ID & provisioning profiles in Apple Developer Portal and include iCloud containers.
+4. Test thoroughly on real devices signed into test iCloud accounts before promoting schema to Production.
+
+Testing notes
+- CI: unit + simulator integration tests run automatically on PR.
+- Manual: run on two real devices with the same test iCloud account to verify sync and persistent-history merges; verify CKShare acceptance flows.
+
+Suggested reviewers & labels
+- Reviewers: none (or add your team reviewers)
+- Labels: enhancement, needs-testing
+
+Checklist (copy into PR)
+- [ ] Replace entitlements placeholders (wire branch prepared)
+- [ ] Update App ID & provisioning in Developer Portal
+- [ ] Run CI & fix failing tests
+- [ ] Manual device verification (sync, shares)
+- [ ] Promote CloudKit schema to Production
+
+Notes
+- I did not change any secrets. Replace placeholders locally and open the wire PR to make config changes auditable.
