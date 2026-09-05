@@ -1,0 +1,19 @@
+name: SwiftData Tests
+on:
+  push:
+    branches: [ feature/swift-data-integration ]
+  pull_request:
+    branches: [ main, feature/swift-data-integration ]
+jobs:
+  tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby (for Xcode tools)
+        uses: ruby/setup-ruby@v1
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test -project YourXcodeProject.xcodeproj -scheme YourScheme -destination 'platform=iOS Simulator,name=iPhone 14' | xcpretty
+        env:
+          CI: true
