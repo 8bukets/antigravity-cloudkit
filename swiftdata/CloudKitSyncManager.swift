@@ -193,6 +193,52 @@ public final class CloudKitSyncManager {
         database.add(op)
     }
 
+    /// New: Fetch incremental changes using CloudKit server change tokens.
+    /// This uses CKFetchDatabaseChangesOperation to obtain a serverChangeToken (fast path) and persists it via the tokenStore.
+    /// The actual record application still uses the existing query-based fetch as a safe fallback; consider implementing
+    /// zone-level CKFetchRecordZoneChangesOperation for fully token-driven delta sync.
+    public func fetchIncrementalChanges(into modelContainer: ModelContainer, batchSize: Int = 200, completion: @escaping (Result<Void, Error>) -> Void) {
+        // Attempt to load a previously-saved server change token. Requires the tokenStore to implement server token persistence.
+        let previousToken = tokenStore.loadServerChangeToken?()
+
+        let op = CKFetchDatabaseChangesOperation(previousServerChangeToken: previousToken)
+        op.qualityOfService = .userInitiated
+
+        var hadError: Error?
+
+        op.changeTokenUpdatedBlock = { token in
+            // intermediate token; persist so subsequent runs can resume
+            self.tokenStore.saveServerChangeToken?(token)
+        }
+
+        op.recordZoneWithIDChangedBlock = { zoneID in
+            // For public DB with no custom zones this may not be called. We still run the query-based fetch as a safe fallback.
+            // Implement zone-specific fetches (CKFetchRecordZoneChangesOperation) here if you use custom record zones.
+        }
+
+        op.fetchDatabaseChangesCompletionBlock = { token, moreComing, error in
+            if let token = token {
+                self.tokenStore.saveServerChangeToken?(token)
+            }
+            if let error = error {
+                // don't fail immediately — fall back to query-based fetch of modifiedAt changes
+                hadError = error
+            }
+
+            // Fall back to the original query-based fetch which the app already uses; keep tokens as an optimization.
+            self.fetchChanges(into: modelContainer, batchSize: batchSize) { res in
+                switch res {
+                case .success:
+                    if let err = hadError { completion(.failure(err)) } else { completion(.success(())) }
+                case .failure(let err):
+                    completion(.failure(err))
+                }
+            }
+        }
+
+        database.add(op)
+    }
+
     private func fetchWithCursor(cursor: CKQueryOperation.Cursor, modelContainer: ModelContainer, batchSize: Int, completion: @escaping (Result<Void, Error>) -> Void) {
         var op = CKQueryOperation(cursor: cursor)
         op.resultsLimit = batchSize
