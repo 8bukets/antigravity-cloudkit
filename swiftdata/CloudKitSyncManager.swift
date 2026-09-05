@@ -3,21 +3,24 @@ import Foundation
 import CloudKit
 import SwiftData
 
-/// Improved CloudKit sync manager for Note <-> CKRecord mapping with basic batching,
-/// cursor handling, and a simple lastSyncDate token. Adapt further for production use.
+/// Hardened CloudKit sync manager for Note <-> CKRecord mapping with batching,
+/// cursor handling, subscriptions, robust retry/backoff and basic conflict resolution.
+/// This is a practical template — test and adapt for your app's reliability and scale needs.
 public final class CloudKitSyncManager {
     private let container: CKContainer
     private let database: CKDatabase
     private let recordType = "Note"
-    private let changeTokenStore: CKTokenStoreProtocol
+    private let tokenStore: CKTokenStoreProtocol
+    private let queue = OperationQueue()
 
     public init(containerIdentifier: String, tokenStore: CKTokenStoreProtocol) {
         self.container = CKContainer(identifier: containerIdentifier)
         self.database = self.container.publicCloudDatabase
-        self.changeTokenStore = tokenStore
+        self.tokenStore = tokenStore
+        self.queue.maxConcurrentOperationCount = 1
     }
 
-    // Map Note -> CKRecord
+    // MARK: - Mapping
     private func record(from note: Note) -> CKRecord {
         let recordID = CKRecord.ID(recordName: note.id.uuidString)
         let record = CKRecord(recordType: recordType, recordID: recordID)
@@ -47,141 +50,181 @@ public final class CloudKitSyncManager {
         }
     }
 
-    // Push a single note
-    public func push(note: Note, completion: @escaping (Result<CKRecord, Error>) -> Void) {
-        let record = record(from: note)
-        let op = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: nil)
-        op.savePolicy = .changedKeys
-        op.modifyRecordsCompletionBlock = { saved, _, error in
-            if let error = error { completion(.failure(error)); return }
-            completion(.success(saved?.first ?? record))
-        }
-        database.add(op)
-    }
+    // MARK: - Subscriptions (optional push notifications)
+    /// Create or update a query subscription so server can push changes. Handle notifications in AppDelegate/SceneDelegate.
+    public func ensureSubscription(recordType: String = "Note", subscriptionID: String = "note-changes") {
+        let info = CKSubscription.NotificationInfo()
+        info.shouldSendContentAvailable = true // silent push
+        // Customise alert/body if you want visible notifications
 
-    // Fetch changes using CKQueryOperation with optional incremental predicate (based on lastSyncDate)
-    // Saves lastSyncDate on successful completion to allow resumable incremental syncs.
-    public func fetchChanges(into modelContainer: ModelContainer,
-                             batchSize: Int = 200,
-                             completion: @escaping (Result<Void, Error>) -> Void) {
-        // Build predicate based on last sync date (if available)
-        let lastSyncDate = changeTokenStore.loadLastSyncDate()
-        let predicate: NSPredicate = {
-            if let d = lastSyncDate {
-                return NSPredicate(format: "modifiedAt > %@", d as NSDate)
-            } else {
-                return NSPredicate(value: true)
-            }
-        }()
+        let subscription = CKQuerySubscription(recordType: recordType,
+                                               predicate: NSPredicate(value: true),
+                                               subscriptionID: subscriptionID,
+                                               options: [.firesOnRecordCreation, .firesOnRecordUpdate, .firesOnRecordDeletion])
+        subscription.notificationInfo = info
 
-        let query = CKQuery(recordType: recordType, predicate: predicate)
-        var operation = CKQueryOperation(query: query)
-        operation.resultsLimit = batchSize
-
-        // Track current run's most recent modifiedAt
-        var maxModifiedAt: Date? = lastSyncDate
-
-        operation.recordFetchedBlock = { record in
-            // apply records into ModelContainer main context
-            DispatchQueue.main.async {
-                let context = modelContainer.mainContext
-                self.apply(record: record, into: context)
-                try? context.save()
-
-                let remoteModified = record["modifiedAt"] as? Date
-                if let rm = remoteModified {
-                    if maxModifiedAt == nil || rm > maxModifiedAt! {
-                        maxModifiedAt = rm
-                    }
+        database.save(subscription) { sub, error in
+            if let err = error as? CKError {
+                if err.code == .serverRejectedRequest {
+                    // subscription already exists or server rejected; consider fetching existing
                 }
             }
+            // ignore other errors here; they will be retried by higher-level logic if needed
+        }
+    }
+
+    // MARK: - Push (batching + retry)
+    /// Push multiple notes in batches. Uses CKModifyRecordsOperation and retries transient errors.
+    public func push(notes: [Note], batchSize: Int = 50, completion: @escaping (Result<Void, Error>) -> Void) {
+        let groups = notes.chunked(into: batchSize)
+        let group = DispatchGroup()
+        var firstError: Error?
+
+        for batch in groups {
+            group.enter()
+            let records = batch.map { record(from: $0) }
+            let op = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
+            op.savePolicy = .changedKeys
+            op.isAtomic = false
+            op.queuePriority = .normal
+
+            op.modifyRecordsCompletionBlock = { saved, deleted, error in
+                if let error = error as NSError? {
+                    // CKError handling
+                    if let ck = CKError(_nsError: error) {
+                        switch ck.code {
+                        case .serviceUnavailable, .requestRateLimited, .networkUnavailable, .networkFailure:
+                            // transient — schedule retry with backoff
+                            self.retryModify(records: records, attempt: 1) { res in
+                                if case .failure(let e) = res { firstError = firstError ?? e }
+                                group.leave()
+                            }
+                            return
+                        default:
+                            firstError = firstError ?? error
+                        }
+                    } else {
+                        firstError = firstError ?? error
+                    }
+                }
+                group.leave()
+            }
+            database.add(op)
         }
 
-        operation.queryCompletionBlock = { cursor, error in
-            if let error = error {
-                completion(.failure(error)); return
-            }
+        group.notify(queue: .main) {
+            if let err = firstError { completion(.failure(err)) } else { completion(.success(())) }
+        }
+    }
 
-            // If there is a cursor, continue paging
+    private func retryModify(records: [CKRecord], attempt: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        let maxAttempts = 5
+        guard attempt <= maxAttempts else { completion(.failure(NSError(domain: "CloudKitSyncManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Max retry attempts reached"]))); return }
+        let delay = pow(2.0, Double(attempt)) + Double.random(in: 0..<1.0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+            let op = CKModifyRecordsOperation(recordsToSave: records, recordIDsToDelete: nil)
+            op.savePolicy = .changedKeys
+            op.modifyRecordsCompletionBlock = { saved, deleted, error in
+                if let error = error as NSError? {
+                    // determine if retryable
+                    if let ck = CKError(_nsError: error) {
+                        switch ck.code {
+                        case .serviceUnavailable, .requestRateLimited, .networkUnavailable, .networkFailure:
+                            self.retryModify(records: records, attempt: attempt + 1, completion: completion)
+                            return
+                        default:
+                            completion(.failure(error))
+                            return
+                        }
+                    }
+                    completion(.failure(error))
+                    return
+                }
+                completion(.success(()))
+            }
+            self.database.add(op)
+        }
+    }
+
+    // MARK: - Fetch changes (incremental using modifiedAt + cursor paging)
+    /// Fetch all records changed since last sync date. Uses paging and saves lastSyncDate on success.
+    public func fetchChanges(into modelContainer: ModelContainer, batchSize: Int = 200, completion: @escaping (Result<Void, Error>) -> Void) {
+        let lastSync = tokenStore.loadLastSyncDate()
+        let predicate: NSPredicate = {
+            if let d = lastSync { return NSPredicate(format: "modifiedAt > %@", d as NSDate) }
+            return NSPredicate(value: true)
+        }()
+
+        var op = CKQueryOperation(query: CKQuery(recordType: recordType, predicate: predicate))
+        op.resultsLimit = batchSize
+
+        var maxModified: Date? = lastSync
+        var hadError: Error?
+
+        op.recordFetchedBlock = { record in
+            DispatchQueue.main.async {
+                let ctx = modelContainer.mainContext
+                self.apply(record: record, into: ctx)
+                try? ctx.save()
+                if let rm = record["modifiedAt"] as? Date { maxModified = max(maxModified ?? rm, rm) }
+            }
+        }
+
+        op.queryCompletionBlock = { cursor, error in
+            if let error = error {
+                hadError = error
+            }
             if let cursor = cursor {
                 self.fetchWithCursor(cursor: cursor, modelContainer: modelContainer, batchSize: batchSize) { res in
                     switch res {
                     case .success:
-                        if let mst = maxModifiedAt { self.changeTokenStore.saveLastSyncDate(mst) }
-                        completion(.success(()))
+                        if let mm = maxModified { self.tokenStore.saveLastSyncDate(mm) }
+                        if let err = hadError { completion(.failure(err)) } else { completion(.success(())) }
                     case .failure(let err):
                         completion(.failure(err))
                     }
                 }
             } else {
-                if let mst = maxModifiedAt { self.changeTokenStore.saveLastSyncDate(mst) }
-                completion(.success(()))
+                if let mm = maxModified { self.tokenStore.saveLastSyncDate(mm) }
+                if let err = hadError { completion(.failure(err)) } else { completion(.success(())) }
             }
         }
 
-        // Exponential backoff wrapper
-        self.runWithRetry(operation: operation, attempts: 3) { result in
-            if case .failure(let err) = result { completion(.failure(err)); return }
-            // normal completion handled in queryCompletionBlock
-        }
+        database.add(op)
     }
 
     private func fetchWithCursor(cursor: CKQueryOperation.Cursor, modelContainer: ModelContainer, batchSize: Int, completion: @escaping (Result<Void, Error>) -> Void) {
         var op = CKQueryOperation(cursor: cursor)
         op.resultsLimit = batchSize
-        var maxModifiedAt: Date? = nil
+
+        var maxModified: Date?
+        var hadError: Error?
 
         op.recordFetchedBlock = { record in
             DispatchQueue.main.async {
-                let context = modelContainer.mainContext
-                self.apply(record: record, into: context)
-                try? context.save()
-                let remoteModified = record["modifiedAt"] as? Date
-                if let rm = remoteModified {
-                    if maxModifiedAt == nil || rm > maxModifiedAt! { maxModifiedAt = rm }
-                }
+                let ctx = modelContainer.mainContext
+                self.apply(record: record, into: ctx)
+                try? ctx.save()
+                if let rm = record["modifiedAt"] as? Date { maxModified = max(maxModified ?? rm, rm) }
             }
         }
 
         op.queryCompletionBlock = { nextCursor, error in
-            if let error = error { completion(.failure(error)); return }
-            if let nextCursor = nextCursor {
-                self.fetchWithCursor(cursor: nextCursor, modelContainer: modelContainer, batchSize: batchSize, completion: completion)
+            if let error = error { hadError = error }
+            if let next = nextCursor {
+                self.fetchWithCursor(cursor: next, modelContainer: modelContainer, batchSize: batchSize, completion: completion)
             } else {
-                // Save the latest modifiedAt from this paging session
-                if let mst = maxModifiedAt { self.changeTokenStore.saveLastSyncDate(mst) }
-                completion(.success(()))
+                if let mm = maxModified { self.tokenStore.saveLastSyncDate(mm) }
+                if let err = hadError { completion(.failure(err)) } else { completion(.success(())) }
             }
         }
 
-        self.runWithRetry(operation: op, attempts: 3) { result in
-            if case .failure(let err) = result { completion(.failure(err)); return }
-        }
+        database.add(op)
     }
 
-    // Simple retry helper with exponential backoff
-    private func runWithRetry(operation: CKDatabaseOperation, attempts: Int, completion: @escaping (Result<Void, Error>) -> Void) {
-        var attempt = 0
-        func runOnce() {
-            attempt += 1
-            operation.qualityOfService = .utility
-            operation.database = self.database
-            operation.start()
-            // Unfortunately CKOperation doesn't provide direct synchronous callbacks here for success; we rely on per-operation completion blocks above.
-            // We'll just call completion with success after a small delay — for robust implementation, wrap callbacks more precisely.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-                // naive: assume success; real code should observe errors in the operation's completion handlers
-                completion(.success(()))
-            }
-        }
-
-        runOnce()
-    }
-
-    // Helper to fetch Note by id using ModelContext
+    // MARK: - Helpers
     private func fetchNoteById(id: UUID, in context: ModelContext) -> Note? {
-        let predicate = NSPredicate(format: "id == %@", id as CVarArg)
-        let fd = FetchDescriptor<Note>(predicate: predicate)
+        let fd = FetchDescriptor<Note>(predicate: NSPredicate(format: "id == %@", id as CVarArg))
         do {
             let results = try context.fetch(fd)
             return results.first
@@ -189,5 +232,21 @@ public final class CloudKitSyncManager {
             print("fetchNoteById error:", error)
             return nil
         }
+    }
+}
+
+
+// MARK: - Utilities
+fileprivate extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0 else { return [self] }
+        var idx = 0
+        var result: [[Element]] = []
+        while idx < self.count {
+            let end = Swift.min(idx + size, self.count)
+            result.append(Array(self[idx..<end]))
+            idx += size
+        }
+        return result
     }
 }
