@@ -24,7 +24,7 @@ final class DataController {
         }
     }
 
-    private init(inMemory: Bool = false) {
+    init(inMemory: Bool = false) {
         // Programmatic Core Data model (Note entity)
         let model = NSManagedObjectModel()
         let note = NSEntityDescription()
