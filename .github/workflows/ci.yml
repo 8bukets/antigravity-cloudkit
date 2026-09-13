@@ -20,6 +20,12 @@ jobs:
       - name: Install xcpretty
         run: gem install xcpretty
 
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
       - name: Build and test
         run: |
           set -o pipefail

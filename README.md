@@ -5,7 +5,10 @@ This project provides a minimal template for Core Data + CloudKit sync (NSPersis
 Quick start (placeholders mode)
 1. Clone the repo
    git clone https://github.com/8bukets/antigravity-cloudkit.git
-2. Open AntigravityCloudKit.xcodeproj in Xcode
+2. Generate the Xcode project (the `.xcodeproj` is not checked in — it's generated from `project.yml` via [XcodeGen](https://github.com/yonaskolb/XcodeGen)):
+   brew install xcodegen
+   xcodegen generate
+   Then open the generated AntigravityCloudKit.xcodeproj in Xcode.
 3. Replace placeholder iCloud container identifiers:
    - AntigravityCloudKit/DataController.swift
    - AntigravityCloudKit/CloudKitManager.swift

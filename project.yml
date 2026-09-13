@@ -1,0 +1,68 @@
+name: AntigravityCloudKit
+
+options:
+  bundleIdPrefix: com.8bukets
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  AntigravityCloudKit:
+    type: application
+    platform: iOS
+    sources:
+      - path: AntigravityCloudKit
+    entitlements:
+      path: AntigravityCloudKit/AntigravityCloudKit.entitlements
+    info:
+      path: Generated-Info.plist
+      properties:
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # This app demonstrates the UIDocument/iCloud Drive flow (DocumentBrowserView.swift,
+        # SampleDocument.swift) — these two keys are required for a document-based app to
+        # open/save files in place from the Files app / iCloud Drive.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.8bukets.antigravity
+        PRODUCT_NAME: AntigravityCloudKit
+
+  AntigravityCloudKitTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/AntigravityCloudKitTests
+    dependencies:
+      - target: AntigravityCloudKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.8bukets.antigravity.tests
+
+schemes:
+  AntigravityCloudKit:
+    build:
+      targets:
+        AntigravityCloudKit: all
+        AntigravityCloudKitTests: [test]
+    test:
+      config: Debug
+      targets:
+        - AntigravityCloudKitTests
+    run:
+      config: Debug
