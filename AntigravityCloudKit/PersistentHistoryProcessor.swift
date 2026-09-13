@@ -49,9 +49,8 @@ final class PersistentHistoryProcessor {
                 let viewContext = self.container.viewContext
                 viewContext.performAndWait {
                     for transaction in transactions {
-                        if let changes = transaction.objectIDNotification() {
-                            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes.userInfo ?? [:], into: [viewContext])
-                        }
+                        let changes = transaction.objectIDNotification()
+                        NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes.userInfo ?? [:], into: [viewContext])
                     }
                     do {
                         if viewContext.hasChanges { try viewContext.save() }
