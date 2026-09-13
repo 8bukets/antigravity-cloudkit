@@ -16,6 +16,8 @@ jobs:
 
       - name: Set up Ruby for xcpretty
         uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
 
       - name: Install xcpretty
         run: gem install xcpretty
