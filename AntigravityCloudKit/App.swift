@@ -10,7 +10,7 @@ struct AntigravityCloudKitApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(\._managedObjectContext, dataController.container.viewContext)
+                .environment(\.managedObjectContext, dataController.container.viewContext)
         }
     }
 }

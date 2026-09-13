@@ -111,7 +111,7 @@ final class DataController {
                 viewContext.performAndWait {
                     for transaction in transactions {
                         if let changes = transaction.objectIDNotification() {
-                            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [viewContext])
+                            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes.userInfo ?? [:], into: [viewContext])
                         }
                     }
                     do {
