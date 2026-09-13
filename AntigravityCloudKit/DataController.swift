@@ -58,11 +58,14 @@ final class DataController {
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
 
-        // Replace with your CloudKit container identifier
-        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.8bukets.antigravity")
-
         if inMemory {
+            // Tests use this path: a plain local store with no CloudKit sync, since a
+            // CloudKit-backed store requires real entitlements and a signed-in iCloud
+            // account, neither of which are available in CI/simulator test runs.
             description.url = URL(fileURLWithPath: "/dev/null")
+        } else {
+            // Replace with your CloudKit container identifier
+            description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.8bukets.antigravity")
         }
 
         container.loadPersistentStores { storeDescription, error in
