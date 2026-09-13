@@ -53,6 +53,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.8bukets.antigravity.tests
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   AntigravityCloudKit:
