@@ -26,9 +26,10 @@ final class DataController {
 
     /// True when the app is running as the host process for an XCTest bundle (unit or UI tests).
     /// Used to keep CloudKit out of any automated test run, including `DataController.shared`'s
-    /// own launch via App.swift as the test host — a CloudKit-backed store needs real entitlements
-    /// and a signed-in iCloud account, neither available in CI/simulator test runs.
-    private static var isRunningTests: Bool {
+    /// own launch via App.swift as the test host, and AppDelegate's own CloudKit account check —
+    /// a CloudKit-backed store/account lookup needs real entitlements and a signed-in iCloud
+    /// account, neither available in CI/simulator test runs.
+    static var isRunningTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 
