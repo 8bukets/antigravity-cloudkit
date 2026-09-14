@@ -24,6 +24,14 @@ final class DataController {
         }
     }
 
+    /// True when the app is running as the host process for an XCTest bundle (unit or UI tests).
+    /// Used to keep CloudKit out of any automated test run, including `DataController.shared`'s
+    /// own launch via App.swift as the test host — a CloudKit-backed store needs real entitlements
+    /// and a signed-in iCloud account, neither available in CI/simulator test runs.
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     init(inMemory: Bool = false) {
         // Programmatic Core Data model (Note entity)
         let model = NSManagedObjectModel()
@@ -58,10 +66,8 @@ final class DataController {
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
 
-        if inMemory {
-            // Tests use this path: a plain local store with no CloudKit sync, since a
-            // CloudKit-backed store requires real entitlements and a signed-in iCloud
-            // account, neither of which are available in CI/simulator test runs.
+        if inMemory || Self.isRunningTests {
+            // A plain local store with no CloudKit sync — see isRunningTests above.
             description.url = URL(fileURLWithPath: "/dev/null")
         } else {
             // Replace with your CloudKit container identifier
