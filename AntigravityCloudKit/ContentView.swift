@@ -3,7 +3,7 @@ import CoreData
 
 struct ContentView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @FetchRequest(entity: NSManagedObject.entity(), sortDescriptors: [NSSortDescriptor(keyPath: \Note.modified, ascending: false)]) private var notes: FetchedResults<Note>
+    @FetchRequest(entity: Note.entity(), sortDescriptors: [NSSortDescriptor(keyPath: \Note.modified, ascending: false)]) private var notes: FetchedResults<Note>
 
     @State private var newTitle = ""
 
