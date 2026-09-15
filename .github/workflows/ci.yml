@@ -16,11 +16,19 @@ jobs:
 
       - name: Set up Ruby for xcpretty
         uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
 
       - name: Install xcpretty
         run: gem install xcpretty
 
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
       - name: Build and test
         run: |
           set -o pipefail
-          xcodebuild test -project AntigravityCloudKit.xcodeproj -scheme AntigravityCloudKit -destination 'platform=iOS Simulator,name=iPhone 14,OS=17.0' -enableCodeCoverage YES | xcpretty
+          xcodebuild test -project AntigravityCloudKit.xcodeproj -scheme AntigravityCloudKit -destination 'platform=iOS Simulator,name=iPhone 17' | xcpretty

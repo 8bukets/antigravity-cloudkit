@@ -24,7 +24,16 @@ final class DataController {
         }
     }
 
-    private init(inMemory: Bool = false) {
+    /// True when the app is running as the host process for an XCTest bundle (unit or UI tests).
+    /// Used to keep CloudKit out of any automated test run, including `DataController.shared`'s
+    /// own launch via App.swift as the test host, and AppDelegate's own CloudKit account check —
+    /// a CloudKit-backed store/account lookup needs real entitlements and a signed-in iCloud
+    /// account, neither available in CI/simulator test runs.
+    static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    init(inMemory: Bool = false) {
         // Programmatic Core Data model (Note entity)
         let model = NSManagedObjectModel()
         let note = NSEntityDescription()
@@ -58,11 +67,12 @@ final class DataController {
         description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         description.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
 
-        // Replace with your CloudKit container identifier
-        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.8bukets.antigravity")
-
-        if inMemory {
+        if inMemory || Self.isRunningTests {
+            // A plain local store with no CloudKit sync — see isRunningTests above.
             description.url = URL(fileURLWithPath: "/dev/null")
+        } else {
+            // Replace with your CloudKit container identifier
+            description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.8bukets.antigravity")
         }
 
         container.loadPersistentStores { storeDescription, error in
@@ -110,9 +120,8 @@ final class DataController {
                 let viewContext = self.container.viewContext
                 viewContext.performAndWait {
                     for transaction in transactions {
-                        if let changes = transaction.objectIDNotification() {
-                            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [viewContext])
-                        }
+                        let changes = transaction.objectIDNotification()
+                        NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes.userInfo ?? [:], into: [viewContext])
                     }
                     do {
                         if viewContext.hasChanges {

@@ -37,7 +37,7 @@ final class PersistentHistoryProcessor {
         let bgContext = container.newBackgroundContext()
         bgContext.perform {
             let request = NSPersistentHistoryChangeRequest.fetchHistory(after: token)
-            request.fetchLimit = self.batchSize
+            request.fetchRequest?.fetchLimit = self.batchSize
             do {
                 guard let result = try bgContext.execute(request) as? NSPersistentHistoryResult,
                       let transactions = result.result as? [NSPersistentHistoryTransaction], !transactions.isEmpty else {
@@ -49,9 +49,8 @@ final class PersistentHistoryProcessor {
                 let viewContext = self.container.viewContext
                 viewContext.performAndWait {
                     for transaction in transactions {
-                        if let changes = transaction.objectIDNotification() {
-                            NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [viewContext])
-                        }
+                        let changes = transaction.objectIDNotification()
+                        NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes.userInfo ?? [:], into: [viewContext])
                     }
                     do {
                         if viewContext.hasChanges { try viewContext.save() }

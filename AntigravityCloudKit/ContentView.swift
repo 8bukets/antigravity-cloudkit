@@ -2,15 +2,15 @@ import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @Environment(\\.managedObjectContext) private var viewContext
-    @FetchRequest(entity: NSManagedObject.entity(), sortDescriptors: [NSSortDescriptor(keyPath: \\Note?.modified, ascending: false)]) private var notes: FetchedResults<Note>
+    @Environment(\.managedObjectContext) private var viewContext
+    @FetchRequest(entity: Note.entity(), sortDescriptors: [NSSortDescriptor(keyPath: \Note.modified, ascending: false)]) private var notes: FetchedResults<Note>
 
     @State private var newTitle = ""
 
     var body: some View {
         NavigationView {
             List {
-                ForEach(notes, id: \\._objectID) { note in
+                ForEach(notes, id: \.objectID) { note in
                     VStack(alignment: .leading) {
                         Text(note.title ?? "Untitled")
                             .font(.headline)
